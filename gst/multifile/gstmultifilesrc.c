@@ -46,7 +46,7 @@
 #endif
 
 #include "gstmultifilesrc.h"
-
+#include <unistd.h>
 
 static GstFlowReturn gst_multi_file_src_create (GstPushSrc * src,
     GstBuffer ** buffer);
@@ -78,11 +78,13 @@ enum
   ARG_START_INDEX,
   ARG_STOP_INDEX,
   ARG_CAPS,
-  ARG_LOOP
+  ARG_LOOP,
+  ARG_FILENAMES
 };
 
 #define DEFAULT_LOCATION "%05d"
 #define DEFAULT_INDEX 0
+#define DEFAULT_FILENAMES 0
 
 #define gst_multi_file_src_parent_class parent_class
 G_DEFINE_TYPE (GstMultiFileSrc, gst_multi_file_src, GST_TYPE_PUSH_SRC);
@@ -175,6 +177,10 @@ gst_multi_file_src_class_init (GstMultiFileSrcClass * klass)
       g_param_spec_boolean ("loop", "Loop",
           "Whether to repeat from the beginning when all files have been read.",
           FALSE, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, ARG_FILENAMES,
+      g_param_spec_object ("filenames", "File names GPtrArray",
+          "GPtrArray containing the filenames", DEFAULT_FILENAMES,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
   gobject_class->dispose = gst_multi_file_src_dispose;
 
@@ -205,7 +211,7 @@ gst_multi_file_src_init (GstMultiFileSrc * multifilesrc)
   multifilesrc->filename = g_strdup (DEFAULT_LOCATION);
   multifilesrc->successful_read = FALSE;
   multifilesrc->fps_n = multifilesrc->fps_d = -1;
-
+  multifilesrc->filenames = g_ptr_array_new ();
 }
 
 static void
@@ -275,12 +281,50 @@ gst_multi_file_src_query (GstBaseSrc * src, GstQuery * query)
   return res;
 }
 
+gint
+compare_items (gpointer a, gpointer b)
+{
+  gchar *alpha = *(gchar **) a;
+  gchar *beta = *(gchar **) b;
+  return g_strcmp0 (alpha, beta);
+}
+
 static gboolean
 gst_multi_file_src_set_location (GstMultiFileSrc * src, const gchar * location)
 {
   g_free (src->filename);
   if (location != NULL) {
+    gchar *path, *extension;
+    GDir *directory;
+    gchar **tokens;
+    GError *error = NULL;
+
     src->filename = g_strdup (location);
+
+    // Spliting path of extension.
+    tokens = g_strsplit (src->filename, "*.", 2);
+    path = tokens[0];
+    extension = tokens[1];
+
+    if (extension) {
+      if (g_strcmp0 (g_strdup (path), "") == 0)
+        path = g_strdup (".");
+      src->extension = g_strdup (extension);
+
+      directory = g_dir_open (path, 0, &error);
+
+      if (directory) {
+        const gchar *afilename;
+        while ((afilename = g_dir_read_name (directory)) != NULL) {
+          if (g_pattern_match_simple (g_strconcat ("*.", extension, NULL),
+                  afilename))
+            g_ptr_array_add (src->filenames, g_strdup (afilename));
+        }
+        g_ptr_array_sort (src->filenames, (GCompareFunc) compare_items);
+        g_dir_close (directory);
+      }
+      g_strfreev (tokens);
+    }
   } else {
     src->filename = NULL;
   }
@@ -336,6 +380,12 @@ gst_multi_file_src_set_property (GObject * object, guint prop_id,
     case ARG_LOOP:
       src->loop = g_value_get_boolean (value);
       break;
+    case ARG_FILENAMES:
+      src->filenames = g_value_get_object (value);
+      src->index = 0;
+      src->start_index = 0;
+      src->stop_index = src->filenames->len;
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -367,6 +417,8 @@ gst_multi_file_src_get_property (GObject * object, guint prop_id,
     case ARG_LOOP:
       g_value_set_boolean (value, src->loop);
       break;
+    case ARG_FILENAMES:
+      g_value_set_object (value, src->filenames);
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -378,9 +430,12 @@ gst_multi_file_src_get_filename (GstMultiFileSrc * multifilesrc)
 {
   gchar *filename;
 
-  GST_DEBUG ("%d", multifilesrc->index);
-  filename = g_strdup_printf (multifilesrc->filename, multifilesrc->index);
-
+  if (!multifilesrc->extension) {
+    GST_DEBUG ("%d", multifilesrc->index);
+    filename = g_strdup_printf (multifilesrc->filename, multifilesrc->index);
+  } else {
+    filename = g_ptr_array_index (multifilesrc->filenames, multifilesrc->index);
+  }
   return filename;
 }
 
@@ -394,6 +449,7 @@ gst_multi_file_src_create (GstPushSrc * src, GstBuffer ** buffer)
   GstBuffer *buf;
   gboolean ret;
   GError *error = NULL;
+
 
   multifilesrc = GST_MULTI_FILE_SRC (src);
 
@@ -436,6 +492,7 @@ gst_multi_file_src_create (GstPushSrc * src, GstBuffer ** buffer)
           return GST_FLOW_EOS;
         }
       } else {
+        g_ptr_array_free (multifilesrc->filenames, TRUE);
         return GST_FLOW_EOS;
       }
     } else {
@@ -472,6 +529,7 @@ handle_error:
           ("%s", g_strerror (errno)));
     }
     g_free (filename);
+    g_ptr_array_free (multifilesrc->filenames, TRUE);
     return GST_FLOW_ERROR;
   }
 }

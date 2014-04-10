@@ -58,6 +58,9 @@ struct _GstMultiFileSrc
   gboolean successful_read;
 
   gint fps_n, fps_d;
+
+  GPtrArray *filenames;
+  gchar *extension;
 };
 
 struct _GstMultiFileSrcClass
@@ -66,7 +69,7 @@ struct _GstMultiFileSrcClass
 };
 
 GType gst_multi_file_src_get_type (void);
-
+gint compare_items (gpointer a, gpointer b);
 G_END_DECLS
 
 #endif /* __GST_MULTIFILESRC_H__ */
