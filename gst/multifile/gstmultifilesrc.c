@@ -46,7 +46,7 @@
 #endif
 
 #include "gstmultifilesrc.h"
-
+#include <gio/gio.h>
 
 static GstFlowReturn gst_multi_file_src_create (GstPushSrc * src,
     GstBuffer ** buffer);
@@ -210,18 +210,17 @@ gst_multi_file_src_init (GstMultiFileSrc * multifilesrc)
   multifilesrc->filename = g_strdup (DEFAULT_LOCATION);
   multifilesrc->successful_read = FALSE;
   multifilesrc->fps_n = multifilesrc->fps_d = -1;
-
 }
 
 static void
 gst_multi_file_src_dispose (GObject * object)
 {
   GstMultiFileSrc *src = GST_MULTI_FILE_SRC (object);
-
   g_free (src->filename);
   src->filename = NULL;
-  if (src->caps)
+  if (src->caps) {
     gst_caps_unref (src->caps);
+  }
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
 }
@@ -399,6 +398,7 @@ gst_multi_file_src_create (GstPushSrc * src, GstBuffer ** buffer)
   gboolean ret;
   GError *error = NULL;
 
+
   multifilesrc = GST_MULTI_FILE_SRC (src);
 
   if (multifilesrc->index < multifilesrc->start_index) {
@@ -447,6 +447,19 @@ gst_multi_file_src_create (GstPushSrc * src, GstBuffer ** buffer)
     }
   }
 
+  if (!multifilesrc->caps && (multifilesrc->fps_n != -1)
+      && (multifilesrc->fps_d != -1)) {
+    gchar *mime;
+
+    mime = g_content_type_guess (filename, NULL, 9, NULL);
+    multifilesrc->caps = gst_caps_new_simple (mime,
+        "framerate", GST_TYPE_FRACTION,
+        multifilesrc->fps_n, multifilesrc->fps_d, NULL);
+    gst_pad_set_caps (GST_BASE_SRC_PAD (multifilesrc), multifilesrc->caps);
+
+    g_free (mime);
+  }
+
   multifilesrc->successful_read = TRUE;
   multifilesrc->index++;
 
@@ -491,7 +504,7 @@ gst_multi_file_src_uri_get_type (GType type)
 static const gchar *const *
 gst_multi_file_src_uri_get_protocols (GType type)
 {
-  static const gchar *protocols[] = { "multifile", NULL };
+  static const gchar *protocols[] = { GST_MULTI_FILE_URI_PROTOCOL, NULL };
 
   return (const gchar * const *) protocols;
 }
@@ -504,7 +517,8 @@ gst_multi_file_src_uri_get_uri (GstURIHandler * handler)
 
   GST_OBJECT_LOCK (src);
   if (src->filename != NULL)
-    ret = g_strdup_printf ("multifile://%s", src->filename);
+    ret =
+        g_strdup_printf ("%s://%s", GST_MULTI_FILE_URI_PROTOCOL, src->filename);
   else
     ret = NULL;
   GST_OBJECT_UNLOCK (src);
@@ -516,12 +530,17 @@ static gboolean
 gst_multi_file_src_uri_set_uri (GstURIHandler * handler, const gchar * uri,
     GError ** error)
 {
-  const gchar *location;
   GstMultiFileSrc *src = GST_MULTI_FILE_SRC (handler);
+  GstMultiFileURI *uri_data = gst_multi_file_uri_new (uri);
 
-  location = uri + 12;
+  g_object_set (src,
+      "start-index", uri_data->start, "stop-index", uri_data->end,
+      "location", uri_data->location, NULL);
 
-  gst_multi_file_src_set_location (src, location);
+  src->fps_n = uri_data->fps_n;
+  src->fps_d = uri_data->fps_d;
+
+  g_free (uri_data);
 
   return TRUE;
 }
