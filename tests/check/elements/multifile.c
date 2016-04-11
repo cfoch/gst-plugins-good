@@ -26,8 +26,10 @@
 #include <unistd.h>
 
 #include <gst/check/gstcheck.h>
+#include <gst/check/gstharness.h>
 #include <gst/video/video.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 static GList *mfs_messages = NULL;
@@ -378,6 +380,76 @@ GST_START_TEST (test_multifilesrc_stop_index)
 
 GST_END_TEST;
 
+GST_START_TEST (test_imagesequencesrc)
+{
+  GstHarness *hsrc;
+  gchar *location, *img1, *img2, *img3;
+  GstBuffer *buf;
+  GstMemory *memory;
+  GstMapInfo info;
+  gchar *data;
+  gsize size;
+
+  location = g_build_filename (GST_TEST_FILES_PATH, "%d.png", NULL);
+  img1 = g_build_filename (GST_TEST_FILES_PATH, "1.png", NULL);
+  img2 = g_build_filename (GST_TEST_FILES_PATH, "2.png", NULL);
+  img3 = g_build_filename (GST_TEST_FILES_PATH, "3.png", NULL);
+
+  fail_unless (hsrc = gst_harness_new ("imagesequencesrc"));
+
+  g_object_set (G_OBJECT (hsrc->element), "location", location,
+      "start-index", 1, "stop-index", 3, NULL);
+
+  gst_harness_use_testclock (hsrc);
+  gst_harness_play (hsrc);
+
+  /* For a default framerate=1/1 */
+  /* Third frame */
+  gst_element_seek_simple (hsrc->element, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH,
+      2 * GST_SECOND);
+
+  buf = gst_harness_pull (hsrc);
+  g_file_get_contents (img3, &data, &size, NULL);
+
+  memory = gst_buffer_get_memory (buf, 0);
+  gst_memory_map (memory, &info, GST_MAP_READ);
+
+  fail_unless (memcmp (info.data, data, info.size) == 0);
+
+  /* First frame */
+  gst_element_seek_simple (hsrc->element, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH,
+      0 * GST_SECOND);
+
+  buf = gst_harness_pull (hsrc);
+  g_file_get_contents (img1, &data, &size, NULL);
+
+  memory = gst_buffer_get_memory (buf, 0);
+  gst_memory_map (memory, &info, GST_MAP_READ);
+
+  fail_unless (memcmp (info.data, data, info.size) == 0);
+
+  /* Second frame */
+  gst_element_seek_simple (hsrc->element, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH,
+      1 * GST_SECOND);
+
+  buf = gst_harness_pull (hsrc);
+  g_file_get_contents (img2, &data, &size, NULL);
+
+  memory = gst_buffer_get_memory (buf, 0);
+  gst_memory_map (memory, &info, GST_MAP_READ);
+
+  fail_unless (memcmp (info.data, data, info.size) == 0);
+
+  gst_harness_teardown (hsrc);
+
+  g_free (location);
+  g_free (img1);
+  g_free (img2);
+  g_free (img3);
+}
+
+GST_END_TEST;
+
 
 static Suite *
 multifile_suite (void)
@@ -392,6 +464,7 @@ multifile_suite (void)
   tcase_add_test (tc_chain, test_multifilesink_key_unit);
   tcase_add_test (tc_chain, test_multifilesrc);
   tcase_add_test (tc_chain, test_multifilesrc_stop_index);
+  tcase_add_test (tc_chain, test_imagesequencesrc);
 
   return s;
 }
