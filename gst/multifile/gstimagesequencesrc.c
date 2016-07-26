@@ -70,7 +70,8 @@ enum
   PROP_INDEX,
   PROP_START_INDEX,
   PROP_STOP_INDEX,
-  PROP_FRAMERATE
+  PROP_FRAMERATE,
+  PROP_DURATION
 };
 
 #define DEFAULT_LOCATION "%05d"
@@ -157,6 +158,10 @@ gst_image_sequence_src_class_init (GstImageSequenceSrcClass * klass)
       gst_param_spec_fraction ("framerate", "Framerate",
           "Set the framerate to internal caps.",
           1, 1, G_MAXINT, 1, 1, 1, G_PARAM_WRITABLE | G_PARAM_STATIC_STRINGS));
+  g_object_class_install_property (gobject_class, PROP_DURATION,
+      g_param_spec_uint64 ("duration", "Duration",
+          "The duration considering the amount of images and the framerate.",
+          0, G_MAXUINT64, 0, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
 
   gobject_class->dispose = gst_image_sequence_src_dispose;
 
@@ -192,6 +197,7 @@ gst_image_sequence_src_init (GstImageSequenceSrc * self)
   self->caps = NULL;
   self->count_frames = 0;
   self->fps_n = self->fps_d = 1;
+  gst_image_sequence_src_set_duration (self);
 }
 
 static void
@@ -295,11 +301,15 @@ gst_image_sequence_src_set_property (GObject * object, guint prop_id,
       break;
     case PROP_START_INDEX:
       self->start_index = g_value_get_int (value);
+      GST_DEBUG_OBJECT (self, "set start-index to %d", self->start_index);
       gst_image_sequence_src_count_frames (self);
+      gst_image_sequence_src_set_duration (self);
       break;
     case PROP_STOP_INDEX:
       self->stop_index = g_value_get_int (value);
+      GST_DEBUG_OBJECT (self, "set stop-index to %d", self->stop_index);
       gst_image_sequence_src_count_frames (self);
+      gst_image_sequence_src_set_duration (self);
       break;
     case PROP_FRAMERATE:
       self->fps_n = gst_value_get_fraction_numerator (value);
@@ -333,8 +343,12 @@ gst_image_sequence_src_get_property (GObject * object, guint prop_id,
     case PROP_FRAMERATE:
       src->fps_n = gst_value_get_fraction_numerator (value);
       src->fps_d = gst_value_get_fraction_denominator (value);
+      gst_image_sequence_src_set_duration (src);
       GST_DEBUG_OBJECT (src, "Set (framerate) property to (%d/%d)", src->fps_n,
           src->fps_d);
+      break;
+    case PROP_DURATION:
+      g_value_set_uint64 (value, src->duration);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -378,6 +392,8 @@ gst_image_sequence_src_set_duration (GstImageSequenceSrc * self)
   self->duration =
       gst_util_uint64_scale (GST_SECOND * self->count_frames, self->fps_d,
       self->fps_n);
+  GST_DEBUG ("Set duration to %" GST_TIME_FORMAT ".",
+      GST_TIME_ARGS (self->duration));
 }
 
 static gchar *
@@ -409,8 +425,6 @@ gst_image_sequence_src_create (GstPushSrc * src, GstBuffer ** buffer)
 
   if (self->index < self->start_index)
     self->index = self->start_index;
-
-
 
   g_assert (self->start_index <= self->index &&
       self->index <= self->stop_index);
